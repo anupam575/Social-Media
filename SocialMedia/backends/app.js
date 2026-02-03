@@ -7,39 +7,49 @@ import userRoutes from "./route/userRoute.js";
 import postRoutes from "./route/postRoute.js";
 import messageRoutes from "./route/messageRoute.js";
 
+/* =========================
+   ENV CONFIG
+========================= */
 dotenv.config();
 
 const app = express();
 
-// ✅ Load environment variables
-dotenv.config();
-const FRONTEND_URL = process.env.FRONTEND_URL?.trim() || "http://localhost:3000";
-console.log("✅ FRONTEND_URL Loaded:", FRONTEND_URL);
+/* =========================
+   CORS CONFIG (ENV BASED)
+========================= */
 
-// ✅ CORS configuration (production ready)
+// FRONTEND_URL can be:
+// - http://localhost:3000
+// - https://your-vercel-app.vercel.app
+const FRONTEND_URL = process.env.FRONTEND_URL?.trim();
+
+if (!FRONTEND_URL) {
+  console.warn("⚠️ FRONTEND_URL is not defined in .env");
+}
+
+console.log("🌐 Allowed Frontend:", FRONTEND_URL);
+
 app.use(
   cors({
-    origin: [FRONTEND_URL, "http://localhost:3000"], // allowed frontend origins
-    credentials: true, // cookies
+    origin: (origin, callback) => {
+      // allow server-to-server / postman requests
+      if (!origin) return callback(null, true);
+
+      if (origin === FRONTEND_URL) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Cache-Control"], // ✅ include Cache-Control
+    allowedHeaders: ["Content-Type", "Authorization", "Cache-Control"],
   })
 );
 
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", FRONTEND_URL);
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, Cache-Control"); // ✅ include Cache-Control
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204); // Preflight response
-  }
-
-  next();
-});
-
-
+/* =========================
+   MIDDLEWARES
+========================= */
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -47,11 +57,7 @@ app.use(cookieParser());
 /* =========================
    ROUTES
 ========================= */
-
-// 🔐 User / Auth routes
 app.use("/api/v1", userRoutes);
-
-// 🖼️ Post / Feed / Like / Comment routes
 app.use("/api/v1", postRoutes);
 app.use("/api/v1", messageRoutes);
 
@@ -73,3 +79,5 @@ app.use((req, res) => {
 });
 
 export default app;
+
+
