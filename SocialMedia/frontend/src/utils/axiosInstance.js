@@ -2,20 +2,23 @@
 
 import axios from "axios";
 
-const BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL?.trim() ||
-  "http://localhost:4000/api/v1";
+// 🔹 Only use backend URL from ENV
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL?.trim();
+
+if (!BASE_URL) {
+  throw new Error("❌ NEXT_PUBLIC_API_URL is not defined");
+}
 
 // Main API instance
 const API = axios.create({
   baseURL: BASE_URL,
-  withCredentials: true,
+  withCredentials: true, // ✅ send cookies
 });
 
-// Refresh-only instance (NO interceptors)
+// Refresh-only instance (no interceptors)
 const refreshAPI = axios.create({
   baseURL: BASE_URL,
-  withCredentials: true,
+  withCredentials: true, // ✅ send cookies
 });
 
 let isRefreshing = false;
@@ -35,11 +38,12 @@ API.interceptors.response.use(
     const originalRequest = error.config;
     const status = error.response?.status;
 
-    // ❌ Never intercept refresh-token itself
+    // ❌ Never intercept /refresh-token itself
     if (originalRequest?.url?.includes("/refresh-token")) {
       return Promise.reject(error);
     }
 
+    // ♻️ 401 handling with refresh token
     if (status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
 
@@ -71,3 +75,4 @@ API.interceptors.response.use(
 );
 
 export default API;
+
