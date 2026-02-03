@@ -15,37 +15,41 @@ dotenv.config();
 const app = express();
 
 /* =========================
-   CORS CONFIG (ENV BASED)
+   CORS CONFIG (PRODUCTION SAFE)
 ========================= */
 
-// FRONTEND_URL can be:
-// - http://localhost:3000
-// - https://your-vercel-app.vercel.app
 const FRONTEND_URL = process.env.FRONTEND_URL?.trim();
 
 if (!FRONTEND_URL) {
-  console.warn("⚠️ FRONTEND_URL is not defined in .env");
+  console.error("❌ FRONTEND_URL is missing in .env");
 }
 
 console.log("🌐 Allowed Frontend:", FRONTEND_URL);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // allow server-to-server / postman requests
-      if (!origin) return callback(null, true);
+const corsOptions = {
+  origin: (origin, callback) => {
+    // ✅ allow Postman, curl, health checks, preflight
+    if (!origin) return callback(null, true);
 
-      if (origin === FRONTEND_URL) {
-        return callback(null, true);
-      }
+    // ✅ allow frontend
+    if (origin === FRONTEND_URL) {
+      return callback(null, true);
+    }
 
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Cache-Control"],
-  })
-);
+    console.error("❌ Blocked by CORS:", origin);
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control"],
+  optionsSuccessStatus: 204,
+};
+
+// ✅ main CORS
+app.use(cors(corsOptions));
+
+// 🔥 VERY IMPORTANT: preflight support
+app.options("*", cors(corsOptions));
 
 /* =========================
    MIDDLEWARES
