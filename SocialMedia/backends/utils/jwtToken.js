@@ -1,9 +1,5 @@
 import { formatUser } from "../utils/formatUser.js";
 
-/**
- * Send access + refresh tokens to client and set cookies.
- * Production-ready: secure cookies + cross-domain safe
- */
 const sendToken = async (user, statusCode, res) => {
   try {
     // 🔐 Generate tokens
@@ -16,12 +12,12 @@ const sendToken = async (user, statusCode, res) => {
 
     const isProduction = process.env.NODE_ENV === "production";
 
-    // 🍪 Cookie options (production-safe)
+    // 🍪 Cookie options (Production SAFE → force None)
     const cookieOptions = (expiresIn) => ({
       expires: new Date(Date.now() + expiresIn),
-      httpOnly: true,            // client-side JS cannot access
-      secure: isProduction,      // must in production (HTTPS)
-      sameSite: isProduction ? "None" : "Lax", // cross-domain safe
+      httpOnly: true,
+      secure: isProduction,   // ✅ HTTPS only in production
+      sameSite: "None",       // ✅ force None for cross-domain
       path: "/",
     });
 
@@ -29,15 +25,24 @@ const sendToken = async (user, statusCode, res) => {
     res
       .status(statusCode)
       .cookie("accessToken", accessToken, cookieOptions(15 * 60 * 1000)) // 15 min
-      .cookie("refreshToken", refreshToken, cookieOptions(7 * 24 * 60 * 60 * 1000)) // 7 days
+      .cookie(
+        "refreshToken",
+        refreshToken,
+        cookieOptions(7 * 24 * 60 * 60 * 1000) // 7 days
+      )
       .json({
         success: true,
         user: formatUser(user),
-        accessToken,
-        refreshToken,
       });
 
-    console.log(`✅ Tokens sent for user: ${user.email}`);
+    // 📝 Debugging logs only in production
+    if (isProduction) {
+      console.log("✅ Tokens sent for user:", user.email);
+      console.log("🔐 Access Token (cookie):", accessToken);
+      console.log("🔐 Refresh Token (cookie):", refreshToken);
+      console.log("🍪 Cookie Options (Access):", cookieOptions(15 * 60 * 1000));
+      console.log("🍪 Cookie Options (Refresh):", cookieOptions(7 * 24 * 60 * 60 * 1000));
+    }
   } catch (err) {
     console.error("💥 sendToken error:", err);
     res.status(500).json({
