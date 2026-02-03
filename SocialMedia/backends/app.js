@@ -15,29 +15,27 @@ dotenv.config();
 const app = express();
 
 /* =========================
-   CORS CONFIG (PRODUCTION SAFE)
+   CORS CONFIG (FINAL)
 ========================= */
 
-const FRONTEND_URL = process.env.FRONTEND_URL?.trim();
+const allowedOrigins = [
+  process.env.FRONTEND_URL?.trim(),
+  "http://localhost:3000", // local dev
+];
 
-if (!FRONTEND_URL) {
-  console.error("❌ FRONTEND_URL is missing in .env");
-}
-
-console.log("🌐 Allowed Frontend:", FRONTEND_URL);
+console.log("🌐 Allowed Origins:", allowedOrigins);
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // ✅ allow Postman, curl, health checks, preflight
+    // allow Postman / server / health-check / preflight
     if (!origin) return callback(null, true);
 
-    // ✅ allow frontend
-    if (origin === FRONTEND_URL) {
+    if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
 
-    console.error("❌ Blocked by CORS:", origin);
-    return callback(new Error("Not allowed by CORS"));
+    console.error("❌ CORS BLOCKED:", origin);
+    return callback(null, false); // ❗ never throw error
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -45,10 +43,10 @@ const corsOptions = {
   optionsSuccessStatus: 204,
 };
 
-// ✅ main CORS
+// ✅ Apply CORS ONCE
 app.use(cors(corsOptions));
 
-// 🔥 VERY IMPORTANT: preflight support
+// ✅ Preflight (MOST IMPORTANT)
 app.options("*", cors(corsOptions));
 
 /* =========================
@@ -83,5 +81,7 @@ app.use((req, res) => {
 });
 
 export default app;
+
+
 
 
