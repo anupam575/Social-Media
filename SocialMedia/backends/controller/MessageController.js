@@ -1,14 +1,6 @@
-
-
-
-
-
-
-
-
-
-import mongoose from "mongoose"; 
+import mongoose from "mongoose";
 import User from "../models/userModel.js"; // सही path अपने project structure के अनुसार
+import sendMessageService from "../services/message.service.js";
 
 import Message from "../models/Messagemodel.js";
 import Conversation from "../models/Conversationmodel.js";
@@ -48,7 +40,6 @@ export const createOrGetChat = async (req, res) => {
   }
 };
 
-
 export const deleteSelectedMessages = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -65,7 +56,7 @@ export const deleteSelectedMessages = async (req, res) => {
       },
       {
         $addToSet: { deletedFor: userId }, // 🔥 only this user
-      }
+      },
     );
 
     return res.json({ success: true });
@@ -74,7 +65,6 @@ export const deleteSelectedMessages = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
-
 
 export const deleteMessagesForEveryone = async (req, res) => {
   try {
@@ -93,7 +83,7 @@ export const deleteMessagesForEveryone = async (req, res) => {
 
     // 2️⃣ Allow ONLY messages sent by current user
     const allowedMessages = messages.filter(
-      (msg) => msg.senderId.toString() === userId.toString()
+      (msg) => msg.senderId.toString() === userId.toString(),
     );
 
     if (!allowedMessages.length) {
@@ -155,7 +145,7 @@ export const getMessages = async (req, res) => {
     // 🔎 Check conversation exists
     const conversation = await Conversation.findById(conversationId).populate(
       "members",
-      "name avatar.url isOnline lastSeen"
+      "name avatar.url isOnline lastSeen",
     );
 
     if (!conversation) {
@@ -184,7 +174,6 @@ export const getMessages = async (req, res) => {
   }
 };
 
-
 export const markMessagesRead = async (req, res) => {
   try {
     const { conversationId, messageIds } = req.body;
@@ -201,7 +190,7 @@ export const markMessagesRead = async (req, res) => {
         receiverId: userId,
         read: false,
       },
-      { $set: { read: true } }
+      { $set: { read: true } },
     );
 
     // 🔔 Emit read receipt
@@ -231,119 +220,62 @@ export const markMessagesRead = async (req, res) => {
   }
 };
 
-
 export const sendMessage = async (req, res) => {
   try {
-    const { text, conversationId, receiverId } = req.body;
-    const senderId = req.user._id; // 🔐 TRUST SERVER ONLY
-
-    if (!text) {
-      return res.status(400).json({ message: "Text is required" });
-    }
-
-    let conversation;
-    let isNew = false;
-
-    // 1️⃣ Get or create conversation
-    if (conversationId) {
-      conversation = await Conversation.findById(conversationId);
-      if (!conversation) {
-        return res.status(404).json({ message: "Conversation not found" });
-      }
-    } else {
-      if (!receiverId) {
-        return res.status(400).json({ message: "receiverId required" });
-      }
-
-      conversation = await Conversation.findOne({
-        members: { $all: [senderId, receiverId] },
-      });
-
-      if (!conversation) {
-        conversation = await Conversation.create({
-          members: [senderId, receiverId],
-          status: "pending",
-          initiatedBy: senderId,
-        });
-        isNew = true;
-      }
-    }
-
-    // 2️⃣ Security: sender must be member
-    const isMember = conversation.members.some(
-      (id) => id.toString() === senderId.toString()
-    );
-    if (!isMember) {
-      return res.status(403).json({ message: "Not allowed" });
-    }
-
-    // 3️⃣ Resolve receiver
-    const actualReceiverId = conversation.members.find(
-      (id) => id.toString() !== senderId.toString()
-    );
-
-    // 4️⃣ Save message (NO SOCKET HERE)
-    let message = await Message.create({
-      conversationId: conversation._id,
-      senderId,
-      receiverId: actualReceiverId,
-      text,
-      read: false,
-      delivered: false,
+    const result = await sendMessageService({
+      senderId: req.user._id, // 🔐 server trusted
+      receiverId: req.body.receiverId,
+      text: req.body.text,
+      conversationId: req.body.conversationId,
     });
-
-    message = await Message.findById(message._id)
-      .populate("senderId", "name avatar.url")
-      .populate("receiverId", "name avatar.url");
-
-    // 5️⃣ Update conversation meta
-    conversation.lastMessage = text;
-    await conversation.save();
-
-    const populatedConversation = await Conversation.findById(
-      conversation._id
-    ).populate("members", "name avatar.url");
-
-    // ❌ NO SOCKET EMIT HERE
-    // 🔥 Socket sendMessage event already handles realtime
 
     res.status(201).json({
       success: true,
-      message,
-      conversation: populatedConversation,
-      isNew,
+      ...result,
     });
   } catch (err) {
-    console.error("❌ SEND MESSAGE API ERROR:", err);
-    res.status(500).json({ error: err.message });
+    console.error("❌ SEND MESSAGE API ERROR:", err.message);
+    res.status(400).json({ error: err.message });
   }
 };
-
-
 
 export const getUserConversations = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // 1️⃣ Fetch accepted conversations
+    // 1️⃣ Fetch accepted conversations of user
     const conversations = await Conversation.find({
       members: userId,
       status: "accepted",
-    }).populate({
-      path: "members",
-      select: "name avatar isOnline lastSeen",
-    });
+    })
+      // 2️⃣ Populate members info
+      .populate({
+        path: "members",
+        select: "name avatar.url isOnline lastSeen",
+      })
 
-    res.status(200).json({ conversations });
+      // 3️⃣ Populate lastMessage (🔥 important)
+      .populate({
+        path: "lastMessage",
+        populate: {
+          path: "senderId",
+          select: "name avatar.url",
+        },
+      })
+
+      // 4️⃣ Latest conversation on top
+      .sort({ lastMessageAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      conversations,
+    });
   } catch (err) {
     console.error("❌ getUserConversations error:", err);
     res.status(500).json({ error: err.message });
   }
 };
 
-// ---------------------------
-// 5️⃣ Get pending requests
-// ---------------------------
 export const getPendingRequests = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -358,44 +290,111 @@ export const getPendingRequests = async (req, res) => {
   }
 };
 
-// ---------------------------
-// ACCEPT CONVERSATION
-// ---------------------------
 export const acceptConversation = async (req, res) => {
   try {
     const { conversationId } = req.params;
+    const userId = req.user._id;
 
-    const conversation = await Conversation.findById(conversationId);
-    if (!conversation) return res.status(404).json({ message: "Conversation not found" });
+    // 1️⃣ Find conversation
+    const conversation = await Conversation.findById(conversationId).populate(
+      "members",
+      "name avatar.url",
+    );
 
+    if (!conversation) {
+      return res.status(404).json({ message: "Conversation not found" });
+    }
+
+    // 2️⃣ Safety check (optional but recommended)
+    const isMember = conversation.members.some(
+      (m) => m._id.toString() === userId.toString(),
+    );
+
+    if (!isMember) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    // 3️⃣ Accept conversation (NO read logic)
     conversation.status = "accepted";
     await conversation.save();
 
-    const messages = await Message.find({ conversationId }).sort({ createdAt: 1 });
+    // 4️⃣ Fetch messages (only fetch, no update)
+    const messages = await Message.find({ conversationId })
+      .sort({ createdAt: 1 })
+      .populate("senderId", "name avatar.url")
+      .populate("receiverId", "name avatar.url");
 
-    res.status(200).json({ conversation, messages });
+    // 5️⃣ Socket-safe messages
+    const safeMessages = messages.map((msg) => ({
+      ...msg._doc,
+      createdAt: msg.createdAt.toISOString(),
+      updatedAt: msg.updatedAt?.toISOString(),
+    }));
+
+    // 6️⃣ 🔔 Emit socket event to all members
+    conversation.members.forEach((member) => {
+      global.io.to(member._id.toString()).emit("requestAccepted", {
+        conversation,
+        messages: safeMessages,
+      });
+    });
+
+    // 7️⃣ API response
+    res.status(200).json({
+      success: true,
+      conversation,
+      messages,
+    });
   } catch (err) {
     console.error("❌ ACCEPT CONVERSATION ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
 
-// ---------------------------
-// REJECT CONVERSATION
-// ---------------------------
 export const rejectConversation = async (req, res) => {
   try {
     const { conversationId } = req.params;
+    const userId = req.user._id;
 
-    const conversation = await Conversation.findByIdAndUpdate(
-      conversationId,
-      { status: "rejected" },
-      { new: true }
+    // 1️⃣ Find conversation
+    const conversation = await Conversation.findById(conversationId).populate(
+      "members",
+      "name avatar.url",
     );
 
-    res.status(200).json({ message: "Request rejected", conversation });
+    if (!conversation) {
+      return res.status(404).json({ message: "Conversation not found" });
+    }
+
+    // 2️⃣ Safety check (optional but recommended)
+    const isMember = conversation.members.some(
+      (m) => m._id.toString() === userId.toString(),
+    );
+
+    if (!isMember) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    // 3️⃣ Reject conversation
+    conversation.status = "rejected";
+    await conversation.save();
+
+    // 4️⃣ 🔔 Emit socket event to all members
+    conversation.members.forEach((member) => {
+      global.io.to(member._id.toString()).emit("requestRejected", {
+        conversationId: conversation._id.toString(),
+      });
+    });
+
+    // 5️⃣ API response
+    res.status(200).json({
+      success: true,
+      message: "Conversation rejected",
+      conversation,
+    });
   } catch (err) {
     console.error("❌ REJECT CONVERSATION ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
+
