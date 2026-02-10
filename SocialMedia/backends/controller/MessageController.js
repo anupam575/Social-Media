@@ -239,42 +239,61 @@ export const sendMessage = async (req, res) => {
   }
 };
 
+
 export const getUserConversations = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // 1️⃣ Fetch accepted conversations of user
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
     const conversations = await Conversation.find({
       members: userId,
       status: "accepted",
     })
-      // 2️⃣ Populate members info
+      // 👤 Members (only what inbox needs)
       .populate({
         path: "members",
-        select: "name avatar.url isOnline lastSeen",
+        select: "name avatar.url",
       })
 
-      // 3️⃣ Populate lastMessage (🔥 important)
+      // 💬 Last message (for inbox preview)
       .populate({
         path: "lastMessage",
+        select: "text createdAt senderId",
         populate: {
           path: "senderId",
-          select: "name avatar.url",
+          select: "name",
         },
       })
 
-      // 4️⃣ Latest conversation on top
+      // ⏰ Latest chat on top (WhatsApp behavior)
       .sort({ lastMessageAt: -1 });
+
+    // 🔒 SAFETY FIX
+    // If for any reason lastMessageAt is missing,
+    // fallback to lastMessage.createdAt (prevents blank time)
+    const formattedConversations = conversations.map((conv) => {
+      const obj = conv.toObject();
+
+      if (!obj.lastMessageAt && obj.lastMessage?.createdAt) {
+        obj.lastMessageAt = obj.lastMessage.createdAt;
+      }
+
+      return obj;
+    });
 
     res.status(200).json({
       success: true,
-      conversations,
+      conversations: formattedConversations,
     });
   } catch (err) {
     console.error("❌ getUserConversations error:", err);
     res.status(500).json({ error: err.message });
   }
 };
+
 
 export const getPendingRequests = async (req, res) => {
   try {
@@ -397,4 +416,6 @@ export const rejectConversation = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+
 
