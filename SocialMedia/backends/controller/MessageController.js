@@ -4,48 +4,20 @@ import sendMessageService from "../services/message.service.js";
 
 import Message from "../models/Messagemodel.js";
 import Conversation from "../models/Conversationmodel.js";
-export const createOrGetChat = async (req, res) => {
-  const { receiverId } = req.body;
-  const senderId = req.user._id;
 
-  if (!receiverId) {
-    return res.status(400).json({ message: "receiverId required" });
-  }
 
-  try {
-    let conversation = await Conversation.findOne({
-      members: { $all: [senderId, receiverId] },
-    })
-      .populate("members", "name avatar lastSeen")
-      .populate("lastMessage");
-
-    if (!conversation) {
-      conversation = await Conversation.create({
-        members: [senderId, receiverId],
-        status: "pending",
-        initiatedBy: senderId,
-      });
-
-      conversation = await Conversation.findById(conversation._id)
-        .populate("members", "name avatar lastSeen")
-        .populate("lastMessage");
-    }
-
-    res.status(200).json({
-      conversation,
-    });
-  } catch (err) {
-    console.error("🔥 createOrGetChat ERROR:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-};
-
+// 🔹 Delete selected messages (for me) with transaction
 export const deleteSelectedMessages = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const userId = req.user.id;
     const { conversationId, messageIds } = req.body;
 
     if (!conversationId || !messageIds?.length) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({ message: "Invalid data" });
     }
 
@@ -55,38 +27,55 @@ export const deleteSelectedMessages = async (req, res) => {
         conversationId,
       },
       {
-        $addToSet: { deletedFor: userId }, // 🔥 only this user
+        $addToSet: { deletedFor: userId }, // only this user
       },
+      { session }
     );
+
+    await session.commitTransaction();
+    session.endSession();
 
     return res.json({ success: true });
   } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
     console.error("❌ deleteForMe error:", err);
     res.status(500).json({ message: "Server error" });
   }
 };
 
+// 🔹 Delete messages for everyone with transaction
 export const deleteMessagesForEveryone = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { messageIds } = req.body;
     const userId = req.user._id;
 
     if (!messageIds?.length) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({ message: "No messageIds provided" });
     }
 
-    // 1️⃣ Fetch messages
-    const messages = await Message.find({ _id: { $in: messageIds } });
+    // 1️⃣ Fetch messages inside session
+    const messages = await Message.find({ _id: { $in: messageIds } }).session(session);
+
     if (!messages.length) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({ message: "No messages found" });
     }
 
     // 2️⃣ Allow ONLY messages sent by current user
     const allowedMessages = messages.filter(
-      (msg) => msg.senderId.toString() === userId.toString(),
+      (msg) => msg.senderId.toString() === userId.toString()
     );
 
     if (!allowedMessages.length) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(403).json({
         message: "You can only delete your own messages for everyone",
       });
@@ -94,10 +83,13 @@ export const deleteMessagesForEveryone = async (req, res) => {
 
     const allowedIds = allowedMessages.map((m) => m._id);
 
-    // 3️⃣ Delete ONLY allowed messages
-    await Message.deleteMany({ _id: { $in: allowedIds } });
+    // 3️⃣ Delete allowed messages
+    await Message.deleteMany({ _id: { $in: allowedIds } }).session(session);
 
-    // 4️⃣ Group deleted messages by conversation
+    await session.commitTransaction();
+    session.endSession();
+
+    // 4️⃣ Emit socket events AFTER commit
     const groupedByConversation = allowedMessages.reduce((acc, msg) => {
       const convId = msg.conversationId.toString();
       if (!acc[convId]) acc[convId] = [];
@@ -105,7 +97,6 @@ export const deleteMessagesForEveryone = async (req, res) => {
       return acc;
     }, {});
 
-    // 5️⃣ Emit socket event to all members
     for (const [conversationId, ids] of Object.entries(groupedByConversation)) {
       const conversation = await Conversation.findById(conversationId)
         .select("members")
@@ -127,6 +118,8 @@ export const deleteMessagesForEveryone = async (req, res) => {
       message: "Messages deleted for everyone",
     });
   } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
     console.error("❌ deleteMessagesForEveryone:", err);
     res.status(500).json({ error: err.message });
   }
@@ -174,51 +167,45 @@ export const getMessages = async (req, res) => {
   }
 };
 
+
+
 export const markMessagesRead = async (req, res) => {
   try {
     const { conversationId, messageIds } = req.body;
     const userId = req.user._id;
 
+    // ✅ Input validation
     if (!conversationId || !Array.isArray(messageIds) || !messageIds.length) {
-      return res.status(200).json({ success: true });
+      return res.status(200).json({ success: true, readCount: 0 });
     }
 
-    // ✅ ONLY specific messages
-    await Message.updateMany(
+    // ✅ Update messages as read without transaction
+    const updateResult = await Message.updateMany(
       {
         _id: { $in: messageIds },
         receiverId: userId,
         read: false,
       },
-      { $set: { read: true } },
+      { $set: { read: true } }
     );
 
-    // 🔔 Emit read receipt
-    const conversation = await Conversation.findById(conversationId)
-      .select("members")
-      .lean();
+    const readCount = updateResult.modifiedCount || 0;
 
-    if (conversation) {
-      conversation.members.forEach((memberId) => {
-        if (memberId.toString() !== userId.toString()) {
-          global.io.to(memberId.toString()).emit("messageRead", {
-            conversationId: conversationId.toString(),
-            messageIds,
-            readerId: userId.toString(),
-          });
-        }
-      });
-    }
-
+    // Return success
     res.status(200).json({
       success: true,
-      readCount: messageIds.length,
+      readCount,
     });
   } catch (err) {
     console.error("❌ markMessagesRead ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
+
+export default markMessagesRead;
+
+
+
 
 export const sendMessage = async (req, res) => {
   try {
@@ -295,6 +282,45 @@ export const getUserConversations = async (req, res) => {
 };
 
 
+
+
+export const createOrGetChat = async (req, res) => {
+  const { receiverId } = req.body;
+  const senderId = req.user._id;
+
+  if (!receiverId) {
+    return res.status(400).json({ message: "receiverId required" });
+  }
+
+  try {
+    let conversation = await Conversation.findOne({
+      members: { $all: [senderId, receiverId] },
+    })
+      .populate("members", "name avatar lastSeen")
+      .populate("lastMessage");
+
+    if (!conversation) {
+      conversation = await Conversation.create({
+        members: [senderId, receiverId],
+        status: "pending",
+        initiatedBy: senderId,
+      });
+
+      conversation = await Conversation.findById(conversation._id)
+        .populate("members", "name avatar lastSeen")
+        .populate("lastMessage");
+    }
+
+    res.status(200).json({
+      conversation,
+    });
+  } catch (err) {
+    console.error("🔥 createOrGetChat ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+
 export const getPendingRequests = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -337,24 +363,12 @@ export const acceptConversation = async (req, res) => {
     conversation.status = "accepted";
     await conversation.save();
 
-    // 4️⃣ Fetch messages (only fetch, no update)
-    const messages = await Message.find({ conversationId })
-      .sort({ createdAt: 1 })
-      .populate("senderId", "name avatar.url")
-      .populate("receiverId", "name avatar.url");
-
-    // 5️⃣ Socket-safe messages
-    const safeMessages = messages.map((msg) => ({
-      ...msg._doc,
-      createdAt: msg.createdAt.toISOString(),
-      updatedAt: msg.updatedAt?.toISOString(),
-    }));
+    
 
     // 6️⃣ 🔔 Emit socket event to all members
     conversation.members.forEach((member) => {
       global.io.to(member._id.toString()).emit("requestAccepted", {
         conversation,
-        messages: safeMessages,
       });
     });
 
@@ -362,7 +376,6 @@ export const acceptConversation = async (req, res) => {
     res.status(200).json({
       success: true,
       conversation,
-      messages,
     });
   } catch (err) {
     console.error("❌ ACCEPT CONVERSATION ERROR:", err);
@@ -416,6 +429,3 @@ export const rejectConversation = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
-
-
