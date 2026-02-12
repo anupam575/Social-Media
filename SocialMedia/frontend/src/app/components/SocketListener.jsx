@@ -38,36 +38,29 @@ export default function GlobalSocketListener() {
       handleConnect();
     }
 
-    // ================= Handlers =================
-    const handleNewMessage = ({ message, conversation }) => {
-      if (!message) return;
+   // ================= Handlers =================
+const handleNewMessage = ({ message, conversation }) => {
+  if (!message) return;
 
-      // 1️⃣ Pehle conversation ko redux me ensure karo
-      if (conversation?._id) {
-        dispatch(
-          addConversationIfNotExists({
-            ...conversation,
-            force: true, // 🔥 important
-          }),
-        );
-      }
+  // 1️⃣ Pehle conversation ko redux me ensure karo
+  if (conversation?._id) {
+    dispatch(
+      addConversationIfNotExists({
+        ...conversation,
+        // force: true ❌ removed
+      }),
+    );
+  }
 
-      // 2️⃣ Ab message add karo
-      dispatch(addIncomingMessage(message));
-    };
+  // 2️⃣ Ab message add karo
+  dispatch(addIncomingMessage(message));
+};
 
-    const handleNewRequest = ({ conversation }) => {
-      dispatch(addRequest(conversation));
-    };
 
     const handleRequestAccepted = ({ conversation, messages }) => {
       dispatch(acceptConversationSuccess(conversation));
-      dispatch(
-        setConversationMessages({
-          conversationId: conversation._id,
-          messages,
-        }),
-      );
+      
+      
     };
 
     const handleRequestRejected = ({ conversationId }) => {
@@ -122,37 +115,38 @@ export default function GlobalSocketListener() {
       );
     };
 
-    const handleUnreadMessages = ({ messages, conversations }) => {
-      if (!Array.isArray(messages)) return;
+const handleUnreadMessages = ({ messages, conversations }) => {
+  if (!Array.isArray(messages)) return;
 
-      if (Array.isArray(conversations)) {
-        conversations.forEach((convo) => {
-          if (!convo?._id) return;
+  if (Array.isArray(conversations)) {
+    conversations.forEach((convo) => {
+      if (!convo?._id) return;
 
-          dispatch(
-            addConversationIfNotExists({
-              ...convo,
-              force: true,
-            }),
-          );
-        });
-      }
+      dispatch(
+        addConversationIfNotExists({
+          ...convo,
+          // force: true ❌ removed
+        }),
+      );
+    });
+  }
 
-      messages.forEach((msg) => {
-        if (!msg?._id) return;
+  messages.forEach((msg) => {
+    if (!msg?._id) return;
 
-        dispatch(
-          addIncomingMessage({
-            ...msg,
-            conversationId: String(
-              typeof msg.conversationId === "object"
-                ? msg.conversationId._id
-                : msg.conversationId,
-            ),
-          }),
-        );
-      });
-    };
+    dispatch(
+      addIncomingMessage({
+        ...msg,
+        conversationId: String(
+          typeof msg.conversationId === "object"
+            ? msg.conversationId._id
+            : msg.conversationId,
+        ),
+      }),
+    );
+  });
+};
+
 
     const handleOnlineSnapshot = ({ onlineUsers }) => {
       if (!Array.isArray(onlineUsers)) return;
@@ -174,7 +168,6 @@ export default function GlobalSocketListener() {
 
     // ================= Listeners =================
     socket.on("newMessage", handleNewMessage);
-    socket.on("newRequest", handleNewRequest);
     socket.on("requestAccepted", handleRequestAccepted);
     socket.on("requestRejected", handleRequestRejected);
     socket.on("userOnline", handleUserOnline);
@@ -195,7 +188,6 @@ export default function GlobalSocketListener() {
       socket.off("newMessage", handleNewMessage);
       socket.off("unreadMessages", handleUnreadMessages);
 
-      socket.off("newRequest", handleNewRequest);
       socket.off("requestAccepted", handleRequestAccepted);
       socket.off("requestRejected", handleRequestRejected);
       socket.off("userOnline", handleUserOnline);
