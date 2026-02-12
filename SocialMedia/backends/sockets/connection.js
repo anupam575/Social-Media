@@ -2,8 +2,9 @@ import { Server } from "socket.io";
 import Conversation from "../models/Conversationmodel.js";
 import Message from "../models/Messagemodel.js";
 import User from "../models/userModel.js";
-import sendMessageService from "../services/message.service.js";
 import messageSocket from "../sockets/message.socket.js";
+import mongoose from "mongoose";
+
 
 // Map to track online users & their multiple tabs
 const onlineUsers = new Map();
@@ -32,9 +33,7 @@ export const initSocket = (server) => {
 
     socket.join(userId.toString()); // personal room
 
-    // ===============================
-    // 🟢 ONLINE USER (MULTI TAB SAFE)
-    // ===============================
+    
     if (!onlineUsers.has(userId)) {
       onlineUsers.set(userId, { sockets: new Set() });
 
@@ -55,29 +54,23 @@ export const initSocket = (server) => {
 
 
     socket.on("getUnreadMessages", async ({ conversationIds }) => {
-      try {
-        const messages = await Message.find({
-          conversationId: { $in: conversationIds },
-          receiverId: socket.userId,
-          read: false,
-        })
-          .populate("senderId", "name avatar.url")
-          .populate("receiverId", "name avatar.url");
+  try {
+    if (!Array.isArray(conversationIds) || !conversationIds.length) return;
 
-        const conversations = await Conversation.find({
-          _id: { $in: conversationIds },
-        }).populate("members", "name avatar.url");
+    const messages = await Message.find({
+      conversationId: { $in: conversationIds },
+      receiverId: socket.userId,
+      read: false,
+    })
+      .select("_id conversationId senderId text createdAt read")
+      .lean();
 
-        socket.emit("unreadMessages", {
-          messages,
-          conversations,
-        });
-      } catch (err) {
-        console.error("❌ getUnreadMessages error:", err);
-      }
-    });
+    socket.emit("unreadMessages", { messages });
+  } catch (err) {
+    console.error("❌ getUnreadMessages error:", err);
+  }
+});
 
-    
 
 
     socket.on("typing", async ({ conversationId, senderId, isTyping }) => {
@@ -133,3 +126,4 @@ export const initSocket = (server) => {
 };
 
 export default initSocket;
+
