@@ -62,7 +62,7 @@ const sendMessageService = async ({
           conversationId: conversation._id,
           senderId,
           receiverId: actualReceiverId,
-          text,
+          text,      
           read: false,
           delivered: false,
         },
@@ -102,3 +102,4 @@ const sendMessageService = async ({
 };
 
 export default sendMessageService;
+
