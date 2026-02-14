@@ -20,11 +20,9 @@ import {
 } from "./chatDateUtils";
 
 export default function ChatScreenn({ onBack }) {
-  const dispatch = useDispatch();
-
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
-const [otherUserState, setOtherUserState] = useState(null); // safe initial value
+  const [otherUserState, setOtherUserState] = useState(null);
 
   const currentUser = useSelector((state) => state.auth?.user);
   const userId = String(currentUser?._id || currentUser?.id);
@@ -49,10 +47,10 @@ const [otherUserState, setOtherUserState] = useState(null); // safe initial valu
       ?.members.find((m) => String(m._id) !== userId) || null;
 
   const otherUserPresence = onlineUsers?.[otherUser?._id];
-  
 
-  const isOtherUserOnline = otherUserPresence?.online ?? otherUserState?.isOnline ?? false;
-const lastSeen = otherUserPresence?.lastSeen ?? otherUserState?.lastSeen;
+  const isOtherUserOnline =
+    otherUserPresence?.online ?? otherUserState?.isOnline ?? false;
+  const lastSeen = otherUserPresence?.lastSeen ?? otherUserState?.lastSeen;
   const isOtherUserTyping =
     typingUsers?.[conversationId]?.[otherUser?._id] || false;
 
@@ -60,180 +58,206 @@ const lastSeen = otherUserPresence?.lastSeen ?? otherUserState?.lastSeen;
   const messagesContainerRef = useRef(null); // Scroll container
   const bottomRef = useRef(null); // Scroll target
 
+  useEffect(() => {
+    if (conversationId) {
+      socket.emit("joinConversation", conversationId);
+    }
 
+    return () => {
+      if (conversationId) {
+        socket.emit("leaveConversation", conversationId);
+      }
+    };
+  }, [conversationId]);
 
+  // ===================== MESSAGE DELIVERED (SINGLE / DOUBLE GRAY TICK) =====================
+  useEffect(() => {
+    if (!conversationId || !userId) return;
+
+    const handleDelivered = ({ conversationId: convId, messageIds }) => {
+      // 1️⃣ Sirf current open conversation
+      if (convId !== conversationId) return;
+
+      if (!Array.isArray(messageIds) || !messageIds.length) return;
+
+      // 2️⃣ Sirf SENDER ke messages pe delivered lagana hai
+      setMessages((prev) =>
+        prev.map((m) => {
+          const isMyMessage = String(m.senderId) === String(userId);
+          const isTarget = messageIds.includes(m._id);
+
+          // already delivered hai to re-render avoid
+          if (isMyMessage && isTarget && !m.delivered) {
+            return { ...m, delivered: true };
+          }
+
+          return m;
+        }),
+      );
+    };
+
+    socket.on("messageDelivered", handleDelivered);
+
+    return () => {
+      socket.off("messageDelivered", handleDelivered);
+    };
+  }, [conversationId, userId]);
 
   useEffect(() => {
-  if (conversationId) {
-    socket.emit("joinConversation", conversationId);
-  }
+    if (!conversationId) return;
 
-  return () => {
-    if (conversationId) {
-      socket.emit("leaveConversation", conversationId);
-    }
-  };
-}, [conversationId]);
-
-
-
-
-useEffect(() => {
-  if (!conversationId) return;
-
-  const handleMessageRead = ({ conversationId: convId, messageIds, readerId }) => {
-    console.log(
-      "🧪 messageRead DEBUG => readerId:",
+    const handleMessageRead = ({
+      conversationId: convId,
+      messageIds,
       readerId,
-      "currentUser:",
-      userId
-    );
+    }) => {
+      // 1️⃣ Sirf current conversation
+      if (convId !== conversationId) return;
 
-    // 1️⃣ Sirf current open conversation ke liye
-    if (convId !== conversationId) return;
+      // 2️⃣ Agar main hi reader hoon → ignore
+      if (String(readerId) === String(userId)) return;
 
-    // 2️⃣ Agar main hi reader hoon → ignore
-    // (receiver ke UI pe blue tick nahi lagta)
-    if (readerId === userId) return;
+      // 3️⃣ Sirf mere bheje hue messages pe blue tick
+      setMessages((prev) =>
+        prev.map((m) => {
+          const isMyMessage = String(m.senderId) === String(userId);
+          const isTarget = messageIds.includes(m._id);
 
-    // 3️⃣ Sirf MERE bheje hue messages pe blue tick lagao
-    setMessages(prev =>
-      prev.map(m => {
-        const isMyMessage = String(m.senderId) === String(userId);
-        const isReadMessage = messageIds.includes(m._id);
+          if (isMyMessage && isTarget && !m.read) {
+            return { ...m, read: true };
+          }
+          return m;
+        }),
+      );
+    };
 
-        if (isMyMessage && isReadMessage) {
-          return { ...m, read: true };
-        }
+    socket.on("messageRead", handleMessageRead);
 
-        return m;
-      })
-    );
+    return () => {
+      socket.off("messageRead", handleMessageRead);
+    };
+  }, [conversationId, userId]);
 
-    console.log("✅ Blue tick applied correctly (sender side only)");
-  };
+  // -------------------- NEW MESSAGE LISTENER --------------------
+  useEffect(() => {
+    if (!conversationId) return;
 
-  socket.on("messageRead", handleMessageRead);
+    const handleNewMessage = ({ message, conversationId: convId }) => {
+      console.log("📨 New message received:", message);
 
-  return () => {
-    socket.off("messageRead", handleMessageRead);
-  };
-}, [conversationId, userId]);
+      // ❌ Agar current conversation nahi hai to ignore
+      if (convId !== conversationId) {
+        console.log(
+          "⏭ Skipping newMessage: conversationId mismatch",
+          convId,
+          conversationId,
+        );
+        return;
+      }
 
+      // 1️⃣ Message local state me add karo
+      setMessages((prev) => {
+        const exists = prev.some((m) => m._id === message._id);
+        if (exists) return prev; // 🛑 duplicate protection
+        return [...prev, message];
+      });
 
+      // 2️⃣ ✅ DELIVERED (receiver device tak pahucha)
+      if (message.receiverId === userId) {
+        socket.emit("messageDelivered", {
+          conversationId: convId,
+          messageIds: [message._id],
+        });
+      }
 
+      // 3️⃣ ✅ READ (receiver ne chat open kar rakhi hai)
+      if (message.receiverId === userId && !message.read) {
+        socket.emit("markMessageRead", {
+          conversationId: convId,
+          messageIds: [message._id],
+        });
 
-// -------------------- NEW MESSAGE LISTENER --------------------
-useEffect(() => {
-  if (!conversationId) return;
+        // 🔥 Optimistic UI (receiver side)
+        setMessages((prev) =>
+          prev.map((m) => (m._id === message._id ? { ...m, read: true } : m)),
+        );
+      }
 
-  const handleNewMessage = ({ message, conversationId: convId }) => {
-    console.log("📨 New message received:", message);
+      // 4️⃣ Scroll to bottom
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    };
 
-    // Sirf current conversation ke liye
-    if (convId !== conversationId) {
-      console.log("⏭ Skipping newMessage: conversationId mismatch", convId, conversationId);
+    socket.on("newMessage", handleNewMessage);
+
+    return () => {
+      socket.off("newMessage", handleNewMessage);
+    };
+  }, [conversationId, userId]);
+
+  const handleUnreadMessages = ({ messages }) => {
+    if (!Array.isArray(messages) || messages.length === 0) {
+      setLoading(false);
       return;
     }
 
-    // 1️⃣ Add message to local state
-    setMessages(prev => {
-      const updated = [...prev, message];
-      console.log(" Messages updated with new message:", updated);
-      return updated;
-    });
+    // 1️⃣ Sirf mujhe aaye hue messages
+    const incoming = messages.filter(
+      (m) => String(m.receiverId?._id || m.receiverId) === String(userId),
+    );
 
-    // 2️⃣ Agar aap receiver ho → auto mark as read
-    if (message.receiverId === userId && !message.read) {
-      console.log(`🔹 Auto marking message as read for user: ${userId} messageId: ${message._id}`);
-      socket.emit("markMessageRead", {
-        conversationId: convId,
-        messageIds: [message._id],
-      });
-
-      // 3️⃣ Instant UI tick
-      setMessages(prev => {
-        const updated = prev.map(m => (m._id === message._id ? { ...m, read: true } : m));
-        console.log("✅ Instant UI updated for read tick:", updated.find(m => m._id === message._id));
-        return updated;
-      });
+    if (incoming.length === 0) {
+      setLoading(false);
+      return;
     }
 
-    // 4️⃣ Scroll to bottom smoothly
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const messageIds = incoming.map((m) => m._id);
+
+    // 2️⃣ Local state update (single setState)
+    setMessages((prev) => {
+      const existingIds = new Set(prev.map((m) => m._id));
+
+      return [
+        ...prev,
+        ...incoming
+          .filter((m) => !existingIds.has(m._id))
+          .map((m) => ({
+            ...m,
+            delivered: true, // device tak aa chuka
+            read: true, // chat open hai isliye read
+          })),
+      ];
+    });
+
+    // 3️⃣ Sender ko notify → delivered
+    socket.emit("messageDelivered", {
+      conversationId,
+      messageIds,
+    });
+
+    // 4️⃣ Sender ko notify → read
+    socket.emit("markMessageRead", {
+      conversationId,
+      messageIds,
+    });
+
+    setLoading(false);
   };
 
-  socket.on("newMessage", handleNewMessage);
-  return () => socket.off("newMessage", handleNewMessage);
-}, [conversationId, userId]);
+  useEffect(() => {
+    if (!conversationId) return;
 
+    setLoading(true);
 
+    socket.emit("getUnreadMessages", {
+      conversationIds: [conversationId],
+    });
 
+    socket.on("unreadMessages", handleUnreadMessages);
 
-const handleUnreadMessages = ({ messages }) => {
-  if (!Array.isArray(messages) || !messages.length) {
-    setLoading(false);
-    return;
-  }
-
-  // ✅ OBJECT / STRING SAFE FILTER
-  const filtered = messages.filter(
-    (m) =>
-      String(m.receiverId?._id || m.receiverId) === userId
-  );
-
-  if (!filtered.length) {
-    setLoading(false);
-    return;
-  }
-
-  // 1️⃣ Add messages locally
-  setMessages((prev) => {
-    const existingIds = new Set(prev.map((m) => m._id));
-    return [
-      ...prev,
-      ...filtered
-        .filter((m) => !existingIds.has(m._id))
-        .map((m) => ({ ...m, read: false })),
-    ];
-  });
-
-  // 2️⃣ 🔥 MARK READ (DB + SENDER NOTIFY)
-  socket.emit("markMessageRead", {
-    conversationId,
-    messageIds: filtered.map((m) => m._id),
-  });
-
-  // 3️⃣ Optimistic UI (receiver side)
-  setMessages((prev) =>
-    prev.map((m) =>
-      filtered.some((fm) => fm._id === m._id)
-        ? { ...m, read: true }
-        : m
-    )
-  );
-
-  setLoading(false);
-};
-
-
-useEffect(() => {
-  if (!conversationId) return;
-
-  setLoading(true);
-
-  // 🔥 unread messages request
-  socket.emit("getUnreadMessages", {
-    conversationIds: [conversationId],
-  });
-
-  socket.on("unreadMessages", handleUnreadMessages);
-
-  return () => {
-    socket.off("unreadMessages", handleUnreadMessages);
-  };
-}, [conversationId, userId]);
-
+    return () => {
+      socket.off("unreadMessages", handleUnreadMessages);
+    };
+  }, [conversationId, userId]);
 
   // ================= SCROLL LOGIC =================
   const scrollToBottom = useCallback(() => {
@@ -283,25 +307,24 @@ useEffect(() => {
   }, [messages, conversationId, scrollToBottom]);
 
   useEffect(() => {
-  if (!conversationId) return;
+    if (!conversationId) return;
 
-  setLoading(true);
+    setLoading(true);
 
-  getMessages({ conversationId }).then((data) => {
-    if (!data) return;
+    getMessages({ conversationId }).then((data) => {
+      if (!data) return;
 
-    setMessages(data.messages || []);
+      setMessages(data.messages || []);
 
-    // ✅ set the other user for lastSeen / online status
-    const other = data.conversation.members.find(
-      (m) => String(m._id) !== userId
-    );
-    if (other) setOtherUserState(other);
+      // ✅ set the other user for lastSeen / online status
+      const other = data.conversation.members.find(
+        (m) => String(m._id) !== userId,
+      );
+      if (other) setOtherUserState(other);
 
-    setLoading(false);
-  });
-}, [conversationId]);
-
+      setLoading(false);
+    });
+  }, [conversationId]);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -398,8 +421,9 @@ useEffect(() => {
           renderMessages={(msg, { selectMode }) => {
             if (!msg) return null;
             const isMe = String(getSenderId(msg.senderId)) === userId;
-
+            const isDelivered = isMe && msg.delivered;
             const isRead = isMe && msg.read;
+
             const index = messages.findIndex((m) => m._id === msg._id);
 
             const currentDate = new Date(msg.createdAt).toDateString();
@@ -439,10 +463,16 @@ useEffect(() => {
                     {/* Timestamp + Read Receipts */}
                     <div className="flex items-center justify-end gap-2 mt-1 text-[10px] text-gray-300 select-none">
                       {formatMessageTime(msg.createdAt)}
+
                       {isMe &&
                         (isRead ? (
+                          // ✅ READ → double blue tick
                           <DoneAllIcon className="!text-[#53bdeb] !text-[14px]" />
+                        ) : isDelivered ? (
+                          // ✅ DELIVERED → double gray tick
+                          <DoneAllIcon className="!text-gray-400 !text-[14px]" />
                         ) : (
+                          // ✅ SENT ONLY → single gray tick
                           <DoneIcon className="!text-gray-400 !text-[14px]" />
                         ))}
                     </div>
