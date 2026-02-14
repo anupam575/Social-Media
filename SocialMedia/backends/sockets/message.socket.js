@@ -1,15 +1,17 @@
 import sendMessageService from "../services/message.service.js";
 import Message from "../models/Messagemodel.js";
 import Conversation from "../models/Conversationmodel.js";
+
 const messageSocket = (io, socket) => {
-  
+
+  // ===================== SEND MESSAGE =====================
   socket.on("sendMessage", async ({ receiverId, text, conversationId }, callback) => {
     try {
       if (!receiverId || !text || !conversationId) {
         return callback?.({ error: "Invalid payload" });
       }
 
-      // Save message securely using socket.userId
+      // 1️⃣ Save message in DB
       const result = await sendMessageService({
         senderId: socket.userId,
         receiverId,
@@ -26,10 +28,10 @@ const messageSocket = (io, socket) => {
 
       const payload = { message, conversationId: convId, isNew };
 
-      // 🔹 Emit to RECEIVER (user room)
+      // 2️⃣ Emit message to RECEIVER
       io.to(actualReceiverId.toString()).emit("newMessage", payload);
 
-      // 🔹 Emit to SENDER (self live update)
+      // 3️⃣ Emit message to SENDER (self update)
       io.to(socket.userId.toString()).emit("newMessage", payload);
 
       callback?.(payload);
@@ -43,22 +45,48 @@ const messageSocket = (io, socket) => {
   socket.on("joinConversation", (conversationId) => {
     if (!conversationId) return;
     socket.join(conversationId.toString());
-    console.log("👥 Joined conversation room:", conversationId);
   });
 
   socket.on("leaveConversation", (conversationId) => {
     if (!conversationId) return;
     socket.leave(conversationId.toString());
-    console.log("🚪 Left conversation room:", conversationId);
   });
 
-  // ===================== MARK MESSAGE AS READ (BLUE TICK) =====================
+  // ===================== MESSAGE DELIVERED (SINGLE TICK) =====================
+  socket.on("messageDelivered", async ({ conversationId, messageIds }) => {
+    if (!conversationId || !Array.isArray(messageIds) || !messageIds.length) return;
+
+    try {
+      // 1️⃣ Update delivered = true
+      const result = await Message.updateMany(
+        {
+          _id: { $in: messageIds },
+          receiverId: socket.userId,
+          delivered: false,
+        },
+        { $set: { delivered: true } }
+      );
+
+      if (!result.modifiedCount) return;
+
+      // 2️⃣ Notify sender (single tick)
+      io.to(conversationId.toString()).emit("messageDelivered", {
+        conversationId,
+        messageIds,
+        receiverId: socket.userId,
+      });
+    } catch (err) {
+      console.error("❌ messageDelivered error:", err);
+    }
+  });
+
+  // ===================== MESSAGE READ (DOUBLE TICK) =====================
   socket.on("markMessageRead", async ({ conversationId, messageIds }) => {
     if (!conversationId || !Array.isArray(messageIds) || !messageIds.length) return;
 
     try {
-      // 1️⃣ Update DB (only receiver can mark read)
-      const updateResult = await Message.updateMany(
+      // 1️⃣ Update read = true
+      const result = await Message.updateMany(
         {
           _id: { $in: messageIds },
           receiverId: socket.userId,
@@ -67,22 +95,19 @@ const messageSocket = (io, socket) => {
         { $set: { read: true } }
       );
 
-      const readCount = updateResult.modifiedCount || 0;
+      if (!result.modifiedCount) return;
 
-      if (!readCount) return;
-
-      // 2️⃣ Emit to CONVERSATION ROOM (sender + receiver)
+      // 2️⃣ Notify both users (double tick)
       io.to(conversationId.toString()).emit("messageRead", {
         conversationId,
         messageIds,
         readerId: socket.userId,
       });
 
-      // 3️⃣ Optional confirmation to reader only
+      // 3️⃣ Optional confirmation to reader
       socket.emit("messageReadConfirmed", {
         conversationId,
         messageIds,
-        readCount,
       });
     } catch (err) {
       console.error("❌ markMessageRead error:", err);
@@ -91,3 +116,5 @@ const messageSocket = (io, socket) => {
 };
 
 export default messageSocket;
+
+
