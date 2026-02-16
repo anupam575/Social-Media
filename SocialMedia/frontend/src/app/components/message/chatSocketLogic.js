@@ -2,13 +2,12 @@ import API from "../../../utils/axiosInstance";
 import socket from "../../../utils/socket";
 import {
   addConversationIfNotExists,
-  setConversationMessages,
 } from "../../../redux/slices/conversationSlice";
 import { setTyping } from "../../../redux/slices/realtimeSlice";
 
 export const handleChatInputLogic = {
   // =========================
-  // ✍️ TYPING LOGIC (UNCHANGED)
+  // ✍️ TYPING LOGIC
   // =========================
   handleTyping: ({
     value,
@@ -40,6 +39,7 @@ export const handleChatInputLogic = {
     }
 
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+
     typingTimeoutRef.current = setTimeout(() => {
       dispatch(
         setTyping({
@@ -60,7 +60,7 @@ export const handleChatInputLogic = {
   },
 
   // =========================
-  // 📩 SEND MESSAGE LOGIC (FIXED)
+  // 📩 SEND MESSAGE LOGIC
   // =========================
   handleSend: async ({
     text,
@@ -71,6 +71,7 @@ export const handleChatInputLogic = {
     otherUser,
   }) => {
     if (!text.trim()) return;
+
     if (!otherUser && !selectedConversationId) {
       console.warn("No receiver selected, cannot send message!");
       return;
@@ -84,12 +85,11 @@ export const handleChatInputLogic = {
     };
 
     try {
-      // ✅ PRIMARY → SOCKET ONLY
+      // =========================
+      // ✅ PRIMARY → SOCKET
+      // =========================
       if (socket.connected) {
         socket.emit("sendMessage", payload, () => {
-          // ❗ Redux update yahan SE REMOVE kar diya
-          // Redux update ab sirf "newMessage" socket listener karega
-
           setText("");
 
           if (selectedConversationId && otherUser) {
@@ -108,21 +108,15 @@ export const handleChatInputLogic = {
             });
           }
         });
-      } 
+      }
       // =========================
-      // 🔄 FALLBACK → API (UNCHANGED)
+      // 🔄 FALLBACK → API
       // =========================
       else {
         const { data } = await API.post("/message", payload);
 
-        // ❗ API fallback me Redux update REHNE DO
+        // ✅ ONLY conversation list update (Inbox)
         dispatch(addConversationIfNotExists(data.conversation));
-        dispatch(
-          setConversationMessages({
-            conversationId: data.conversation._id,
-            messages: [data.message],
-          })
-        );
 
         setText("");
 
@@ -142,7 +136,7 @@ export const handleChatInputLogic = {
   },
 
   // =========================
-  // 🧹 CLEANUP (UNCHANGED)
+  // 🧹 CLEANUP
   // =========================
   cleanup: ({ dispatch, userId, selectedConversationId, otherUser }) => {
     if (selectedConversationId && otherUser) {
