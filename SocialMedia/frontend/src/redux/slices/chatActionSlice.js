@@ -24,12 +24,11 @@ export const acceptRequest = createAsyncThunk(
     try {
       const { data } = await API.put(`/accept/${conversationId}`);
       const convo = data.conversation;
-      const messages = data.messages || [];
 
       // ✅ Automatically update conversation slice
       if (convo?._id) {
         dispatch(addConversationIfNotExists(convo));
-        dispatch(setConversationMessages({ conversationId: convo._id, messages }));
+        
       }
 
       return data;
@@ -119,3 +118,5 @@ const chatActionSlice = createSlice({
 
 export const { clearChatActionError } = chatActionSlice.actions;
 export default chatActionSlice.reducer;
+
+
