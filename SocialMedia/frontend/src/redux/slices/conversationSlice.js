@@ -5,7 +5,6 @@ const initialState = {
   conversations: [],
   pendingRequests: [],
   selectedConversationId: null,
-  messagesByConversation: {},
 };
 
 const conversationSlice = createSlice({
@@ -29,19 +28,28 @@ const conversationSlice = createSlice({
       // directly add (no spread, no force, no cleanup)
       state.conversations.unshift(convo);
     },
+
+    
+updateConversationLastMessage: (state, action) => {
+  const { conversationId, lastMessage } = action.payload;
+
+  const index = state.conversations.findIndex(
+    (c) => c._id === conversationId
+  );
+  if (index === -1) return;
+
+  state.conversations[index].lastMessage = lastMessage;
+
+  // 🔥 move to top
+  const [convo] = state.conversations.splice(index, 1);
+  state.conversations.unshift(convo);
+},
+
     // ================= MESSAGES =================
 
     setSelectedConversationId: (state, action) => {
       state.selectedConversationId = action.payload;
       console.log("📌 Selected conversation:", action.payload);
-    },
-
-    setConversationMessages: (state, action) => {
-      const { conversationId, messages } = action.payload;
-      if (!conversationId || !Array.isArray(messages)) return;
-
-      // direct replace
-      state.messagesByConversation[conversationId] = messages;
     },
 
     acceptConversationSuccess: (state, action) => {
@@ -79,10 +87,13 @@ const conversationSlice = createSlice({
 export const {
   addConversationIfNotExists,
   setSelectedConversationId,
-  setConversationMessages,
   acceptConversationSuccess,
+    updateConversationLastMessage, // ✅ ADD THIS
+
   rejectConversationSuccess,
   resetConversationState,
 } = conversationSlice.actions;
 
 export default conversationSlice.reducer;
+
+
