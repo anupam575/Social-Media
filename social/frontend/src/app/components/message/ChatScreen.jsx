@@ -409,7 +409,7 @@ export default function ChatScreenn({ onBack }) {
 
       <div
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 scrollbar-hide"
+        className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3 scrollbar-thin"
       >
         {loading && (
           <p className="text-center text-gray-400 text-sm">Loading...</p>
