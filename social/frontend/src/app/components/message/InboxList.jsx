@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState, useRef, useMemo } from "react";
@@ -18,7 +19,6 @@ export default function InboxList({ onSelectChat }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const bottomRef = useRef(null);
 
   // ================= AUTH =================
   const currentUser = useSelector((state) => state.auth?.user);
@@ -80,7 +80,6 @@ export default function InboxList({ onSelectChat }) {
         console.error("❌ Failed to fetch conversations:", err);
       } finally {
         setLoading(false);
-        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
       }
     };
 
@@ -110,7 +109,6 @@ export default function InboxList({ onSelectChat }) {
         })
       );
 
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     };
 
     socket.on("newMessage", handleNewMessage);
@@ -141,7 +139,7 @@ export default function InboxList({ onSelectChat }) {
       : "";
 
   return (
-    <div className="flex-1 overflow-y-auto scrollbar-hide">
+    <div className="flex-1 overflow-y-auto scrollbar-thin">
       {sortedInboxConversations.map((conv) => {
         const otherUser = conv.members?.find(
           (m) => String(m._id) !== userId
@@ -201,7 +199,6 @@ export default function InboxList({ onSelectChat }) {
           </div>
         );
       })}
-      <div ref={bottomRef} />
     </div>
   );
 }
