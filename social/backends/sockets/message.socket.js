@@ -4,44 +4,55 @@ import Conversation from "../models/Conversationmodel.js";
 
 const messageSocket = (io, socket) => {
 
-  // ===================== SEND MESSAGE =====================
-  socket.on("sendMessage", async ({ receiverId, text, conversationId }, callback) => {
-    try {
-      if (!receiverId || !text || !conversationId) {
-        return callback?.({ error: "Invalid payload" });
+  /* ======================================================
+     SEND MESSAGE (WhatsApp style)
+     ====================================================== */
+  socket.on(
+    "sendMessage",
+    async ({ receiverId, text, conversationId }, callback) => {
+      try {
+        if (!receiverId || !text || !conversationId) {
+          return callback?.({ error: "Invalid payload" });
+        }
+
+        // 1️⃣ Save message in DB (source of truth)
+        const result = await sendMessageService({
+          senderId: socket.userId,
+          receiverId,
+          text,
+          conversationId,
+        });
+
+        const {
+          message,
+          receiverId: actualReceiverId,
+          conversationId: convId,
+          isNew,
+        } = result;
+
+        const payload = {
+          message,
+          conversationId: convId,
+          isNew,
+        };
+
+        // 2️⃣ Deliver message to RECEIVER (ALL devices)
+        io.to(actualReceiverId.toString()).emit("newMessage", payload);
+
+        // 3️⃣ Deliver message to SENDER (self sync, all devices)
+        io.to(socket.userId.toString()).emit("newMessage", payload);
+
+        callback?.(payload);
+      } catch (err) {
+        console.error("❌ sendMessage socket error:", err);
+        callback?.({ error: err.message });
       }
-
-      // 1️⃣ Save message in DB
-      const result = await sendMessageService({
-        senderId: socket.userId,
-        receiverId,
-        text,
-        conversationId,
-      });
-
-      const {
-        message,
-        receiverId: actualReceiverId,
-        conversationId: convId,
-        isNew,
-      } = result;
-
-      const payload = { message, conversationId: convId, isNew };
-
-      // 2️⃣ Emit message to RECEIVER
-      io.to(actualReceiverId.toString()).emit("newMessage", payload);
-
-      // 3️⃣ Emit message to SENDER (self update)
-      io.to(socket.userId.toString()).emit("newMessage", payload);
-
-      callback?.(payload);
-    } catch (err) {
-      console.error("❌ sendMessage socket error:", err);
-      callback?.({ error: err.message });
     }
-  });
+  );
 
-  // ===================== JOIN / LEAVE CONVERSATION =====================
+  /* ======================================================
+     JOIN / LEAVE CONVERSATION (UI helper only)
+     ====================================================== */
   socket.on("joinConversation", (conversationId) => {
     if (!conversationId) return;
     socket.join(conversationId.toString());
@@ -52,12 +63,15 @@ const messageSocket = (io, socket) => {
     socket.leave(conversationId.toString());
   });
 
-  // ===================== MESSAGE DELIVERED (SINGLE TICK) =====================
+  /* ======================================================
+     MESSAGE DELIVERED (✓ single tick)
+     WhatsApp rule: notify SENDER USER (not conversation)
+     ====================================================== */
   socket.on("messageDelivered", async ({ conversationId, messageIds }) => {
-    if (!conversationId || !Array.isArray(messageIds) || !messageIds.length) return;
+    if (!Array.isArray(messageIds) || !messageIds.length) return;
 
     try {
-      // 1️⃣ Update delivered = true
+      // 1️⃣ Mark delivered in DB
       const result = await Message.updateMany(
         {
           _id: { $in: messageIds },
@@ -69,9 +83,16 @@ const messageSocket = (io, socket) => {
 
       if (!result.modifiedCount) return;
 
-      // 2️⃣ Notify sender (single tick)
-      io.to(conversationId.toString()).emit("messageDelivered", {
-        conversationId,
+      // 2️⃣ Find sender (single query, safe)
+      const firstMsg = await Message.findById(messageIds[0])
+        .select("senderId conversationId")
+        .lean();
+
+      if (!firstMsg) return;
+
+      // 3️⃣ Notify SENDER (ALL devices)
+      io.to(firstMsg.senderId.toString()).emit("messageDelivered", {
+        conversationId: firstMsg.conversationId.toString(),
         messageIds,
         receiverId: socket.userId,
       });
@@ -80,12 +101,15 @@ const messageSocket = (io, socket) => {
     }
   });
 
-  // ===================== MESSAGE READ (DOUBLE TICK) =====================
+  /* ======================================================
+     MESSAGE READ (✓✓ double tick)
+     WhatsApp rule: notify SENDER USER (not conversation)
+     ====================================================== */
   socket.on("markMessageRead", async ({ conversationId, messageIds }) => {
-    if (!conversationId || !Array.isArray(messageIds) || !messageIds.length) return;
+    if (!Array.isArray(messageIds) || !messageIds.length) return;
 
     try {
-      // 1️⃣ Update read = true
+      // 1️⃣ Mark read in DB
       const result = await Message.updateMany(
         {
           _id: { $in: messageIds },
@@ -97,16 +121,23 @@ const messageSocket = (io, socket) => {
 
       if (!result.modifiedCount) return;
 
-      // 2️⃣ Notify both users (double tick)
-      io.to(conversationId.toString()).emit("messageRead", {
-        conversationId,
+      // 2️⃣ Find sender
+      const firstMsg = await Message.findById(messageIds[0])
+        .select("senderId conversationId")
+        .lean();
+
+      if (!firstMsg) return;
+
+      // 3️⃣ Notify SENDER (ALL devices)
+      io.to(firstMsg.senderId.toString()).emit("messageRead", {
+        conversationId: firstMsg.conversationId.toString(),
         messageIds,
         readerId: socket.userId,
       });
 
-      // 3️⃣ Optional confirmation to reader
-      socket.emit("messageReadConfirmed", {
-        conversationId,
+      // 4️⃣ Optional confirmation to READER (self devices)
+      io.to(socket.userId.toString()).emit("messageReadConfirmed", {
+        conversationId: firstMsg.conversationId.toString(),
         messageIds,
       });
     } catch (err) {
@@ -116,3 +147,4 @@ const messageSocket = (io, socket) => {
 };
 
 export default messageSocket;
+
