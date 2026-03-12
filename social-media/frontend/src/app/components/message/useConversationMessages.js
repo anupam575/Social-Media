@@ -125,88 +125,87 @@ export const useConversationMessages = (conversationId, userId) => {
       rebuildMessages();
     };
 
-    // NEW MESSAGE
+    // NEW M
+
     const handleNewMessage = ({ message, conversationId: convId }) => {
+  // 1️⃣ Check if this message belongs to current conversation
+  if (String(convId) !== String(conversationId)) return;
 
-      if (String(convId) !== String(conversationId)) return;
+  // 2️⃣ Directly set message in Map (full DB object)
+  messagesMapRef.current.set(String(message._id), message);
 
-      const existing = messagesMapRef.current.get(String(message._id));
+  // 3️⃣ Rebuild UI/messages list
+  rebuildMessages();
 
-      messagesMapRef.current.set(String(message._id), {
-        ...existing,
-        ...message
-      });
+  // 4️⃣ Only for messages where current user is the receiver
+  if (String(message.receiverId) !== String(userId)) return;
 
-      rebuildMessages();
+  const messageIds = [message._id];
 
-      if (String(message.receiverId) !== String(userId)) return;
+  // 5️⃣ Emit delivered event to sender
+  socket.emit("messageDelivered", {
+    conversationId: convId,
+    messageIds
+  });
 
-      const messageIds = [message._id];
+  // 6️⃣ If message is unread, mark it as read
+  if (!message.read) {
+    socket.emit("markMessageRead", {
+      conversationId: convId,
+      messageIds
+    });
 
-      socket.emit("messageDelivered", {
-        conversationId: convId,
-        messageIds
-      });
+    // 7️⃣ Update Map locally to reflect delivered + read
+    const msg = messagesMapRef.current.get(String(message._id));
+    messagesMapRef.current.set(String(message._id), {
+      ...msg,
+      delivered: true,
+      read: true
+    });
 
-      if (!message.read) {
+    // 8️⃣ Rebuild UI again
+    rebuildMessages();
+  }
+};     
+    // 
 
-        socket.emit("markMessageRead", {
-          conversationId: convId,
-          messageIds
-        });
-
-        const msg = messagesMapRef.current.get(String(message._id));
-
-        messagesMapRef.current.set(String(message._id), {
-          ...msg,
-          delivered: true,
-          read: true
-        });
-
-        rebuildMessages();
-      }
-    };
-
-    // UNREAD
     const handleUnread = ({ messages: incomingMessages }) => {
+  // 1️⃣ Validate input
+  if (!Array.isArray(incomingMessages) || !incomingMessages.length) return;
 
-      if (!Array.isArray(incomingMessages)) return;
+  // 2️⃣ Filter only messages for current user
+  const filtered = incomingMessages.filter(
+    (m) => String(m.receiverId?._id || m.receiverId) === String(userId)
+  );
 
-      const filtered = incomingMessages.filter(
-        (m) => String(m.receiverId?._id || m.receiverId) === String(userId)
-      );
+  if (!filtered.length) return;
 
-      if (!filtered.length) return;
+  // 3️⃣ Collect message IDs for delivered/read updates
+  const messageIds = filtered.map((m) => m._id);
 
-      const messageIds = [];
+  // 4️⃣ Directly set each message in Map (full DB object)
+  filtered.forEach((m) => {
+    messagesMapRef.current.set(String(m._id), {
+      ...m,           // DB object already complete
+      delivered: true,
+      read: true
+    });
+  });
 
-      filtered.forEach((m) => {
+  // 5️⃣ Rebuild UI/messages list
+  rebuildMessages();
 
-        messageIds.push(m._id);
+  // 6️⃣ Emit socket events to mark delivered and read
+  socket.emit("messageDelivered", {
+    conversationId,
+    messageIds
+  });
 
-        const existing = messagesMapRef.current.get(String(m._id));
-
-        messagesMapRef.current.set(String(m._id), {
-          ...existing,
-          ...m,
-          delivered: true,
-          read: true
-        });
-
-      });
-
-      rebuildMessages();
-
-      socket.emit("messageDelivered", {
-        conversationId,
-        messageIds
-      });
-
-      socket.emit("markMessageRead", {
-        conversationId,
-        messageIds
-      });
-    };
+  socket.emit("markMessageRead", {
+    conversationId,
+    messageIds
+  });
+};
 
     // DELETE
     const handleDeleted = ({ conversationId: convId, messageIds }) => {
