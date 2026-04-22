@@ -1,27 +1,34 @@
+"use client";
 import { useEffect, useRef, useState, useCallback } from "react";
 import socket from "../../../utils/socket";
 import { getMessages } from "./getMessagesLogic";
 
 export const useConversationMessages = (conversationId, userId) => {
-
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+
   const [otherUserState, setOtherUserState] = useState(null);
 
   const messagesMapRef = useRef(new Map());
-
   const messagesContainerRef = useRef(null);
   const isUserAtBottomRef = useRef(true);
+  const scrollTimeoutRef = useRef(null);
 
-  const rebuildMessages = () => {
-    const arr = Array.from(messagesMapRef.current.values());
+  const updateMessagesMap = useCallback((updater) => {
+    const newMap = new Map(messagesMapRef.current);
 
-    arr.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    updater(newMap);
+
+    messagesMapRef.current = newMap;
+
+    const arr = [...newMap.values()].sort(
+      (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
+    );
 
     setMessages(arr);
-  };
-
-  // -------------------- FETCH INITIAL MESSAGES --------------------
+  }, []);
+  // -------------------- FETCH INITIAL --------------------
 
   useEffect(() => {
     if (!conversationId) return;
@@ -30,193 +37,147 @@ export const useConversationMessages = (conversationId, userId) => {
 
     const fetchMessages = async () => {
       try {
-
         const data = await getMessages({ conversationId });
         if (!data) return;
 
         const map = new Map();
-
         (data.messages || []).forEach((m) => {
           map.set(String(m._id), m);
         });
 
         messagesMapRef.current = map;
-
-        rebuildMessages();
+        updateMessagesMap(() => map);
 
         const other = data.conversation.members.find(
-          (m) => String(m._id) !== String(userId)
+          (m) => String(m._id) !== String(userId),
         );
 
         if (other) setOtherUserState(other);
-
       } catch (err) {
-        console.error("Failed to fetch messages:", err);
+        console.error(err);
       } finally {
         setLoading(false);
       }
     };
 
     fetchMessages();
-
-  }, [conversationId, userId]);
+  }, [conversationId, userId, updateMessagesMap]);
 
   // -------------------- SOCKET JOIN --------------------
 
   useEffect(() => {
-
     if (!conversationId) return;
 
     socket.emit("joinConversation", conversationId);
-
     return () => socket.emit("leaveConversation", conversationId);
-
   }, [conversationId]);
 
   // -------------------- SOCKET EVENTS --------------------
 
   useEffect(() => {
-
     if (!conversationId || !userId) return;
 
-    // DELIVERED
-    const handleDelivered = ({ conversationId: convId, messageIds }) => {
+    socket.off("messageDelivered");
+    socket.off("messageRead");
+    socket.off("newMessage");
+    socket.off("messageDeleted");
+    socket.off("unreadMessages");
 
+    // ✅ DELIVERED
+    const handleDelivered = ({ conversationId: convId, messageIds }) => {
       if (String(convId) !== String(conversationId)) return;
 
-      messageIds.forEach((id) => {
-
-        const msg = messagesMapRef.current.get(String(id));
-
-        if (msg && String(msg.senderId) === String(userId)) {
-          messagesMapRef.current.set(String(id), {
-            ...msg,
-            delivered: true
-          });
-        }
-
+      updateMessagesMap((map) => {
+        messageIds.forEach((id) => {
+          const msg = map.get(String(id));
+          if (msg && String(msg.senderId) === String(userId)) {
+            map.set(String(id), { ...msg, delivered: true });
+          }
+        });
       });
-
-      rebuildMessages();
     };
 
-    // READ
+    // ✅ READ
     const handleRead = ({ conversationId: convId, messageIds, readerId }) => {
-
       if (
         String(convId) !== String(conversationId) ||
         String(readerId) === String(userId)
       )
         return;
 
-      messageIds.forEach((id) => {
-
-        const msg = messagesMapRef.current.get(String(id));
-
-        if (msg && String(msg.senderId) === String(userId)) {
-          messagesMapRef.current.set(String(id), {
-            ...msg,
-            read: true
-          });
-        }
-
+      updateMessagesMap((map) => {
+        messageIds.forEach((id) => {
+          const msg = map.get(String(id));
+          if (msg && String(msg.senderId) === String(userId)) {
+            map.set(String(id), { ...msg, read: true });
+          }
+        });
       });
-
-      rebuildMessages();
     };
-
-    // NEW M
-
     const handleNewMessage = ({ message, conversationId: convId }) => {
-  // 1️⃣ Check if this message belongs to current conversation
-  if (String(convId) !== String(conversationId)) return;
-
-  // 2️⃣ Directly set message in Map (full DB object)
-  messagesMapRef.current.set(String(message._id), message);
-
-  // 3️⃣ Rebuild UI/messages list
-  rebuildMessages();
-
-  // 4️⃣ Only for messages where current user is the receiver
-  if (String(message.receiverId) !== String(userId)) return;
-
-  const messageIds = [message._id];
-
-  // 5️⃣ Emit delivered event to sender
-  socket.emit("messageDelivered", {
-    conversationId: convId,
-    messageIds
-  });
-
-  // 6️⃣ If message is unread, mark it as read
-  if (!message.read) {
-    socket.emit("markMessageRead", {
-      conversationId: convId,
-      messageIds
-    });
-
-    // 7️⃣ Update Map locally to reflect delivered + read
-    const msg = messagesMapRef.current.get(String(message._id));
-    messagesMapRef.current.set(String(message._id), {
-      ...msg,
-      delivered: true,
-      read: true
-    });
-
-    // 8️⃣ Rebuild UI again
-    rebuildMessages();
-  }
-};     
-    // 
-
-    const handleUnread = ({ messages: incomingMessages }) => {
-  // 1️⃣ Validate input
-  if (!Array.isArray(incomingMessages) || !incomingMessages.length) return;
-
-  // 2️⃣ Filter only messages for current user
-  const filtered = incomingMessages.filter(
-    (m) => String(m.receiverId?._id || m.receiverId) === String(userId)
-  );
-
-  if (!filtered.length) return;
-
-  // 3️⃣ Collect message IDs for delivered/read updates
-  const messageIds = filtered.map((m) => m._id);
-
-  // 4️⃣ Directly set each message in Map (full DB object)
-  filtered.forEach((m) => {
-    messagesMapRef.current.set(String(m._id), {
-      ...m,           // DB object already complete
-      delivered: true,
-      read: true
-    });
-  });
-
-  // 5️⃣ Rebuild UI/messages list
-  rebuildMessages();
-
-  // 6️⃣ Emit socket events to mark delivered and read
-  socket.emit("messageDelivered", {
-    conversationId,
-    messageIds
-  });
-
-  socket.emit("markMessageRead", {
-    conversationId,
-    messageIds
-  });
-};
-
-    // DELETE
-    const handleDeleted = ({ conversationId: convId, messageIds }) => {
-
       if (String(convId) !== String(conversationId)) return;
 
-      messageIds.forEach((id) => {
-        messagesMapRef.current.delete(String(id));
+      const isReceiver = String(message.receiverId) === String(userId);
+
+      // ✅ IMPORTANT: yaha read mat karo
+      updateMessagesMap((map) => {
+        map.set(String(message._id), {
+          ...message,
+          delivered: isReceiver ? true : message.delivered,
+          read: message.read || false, // ❌ force read nahi
+        });
       });
 
-      rebuildMessages();
+      // ✅ sirf receiver side pe emit hoga
+      if (!isReceiver) return;
+
+      const messageIds = [message._id];
+
+      // ✅ always delivered
+      socket.emit("messageDelivered", {
+        conversationId: convId,
+        messageIds,
+      });
+
+      // ❌ yaha read emit nahi hoga
+    };
+
+    const handleUnread = ({ messages: incomingMessages }) => {
+      if (!Array.isArray(incomingMessages) || !incomingMessages.length) return;
+
+      const filtered = incomingMessages.filter(
+        (m) => String(m.receiverId?._id || m.receiverId) === String(userId),
+      );
+
+      if (!filtered.length) return;
+
+      const messageIds = filtered.map((m) => m._id);
+
+      updateMessagesMap((map) => {
+        filtered.forEach((m) => {
+          map.set(String(m._id), {
+            ...m,
+            delivered: true,
+            read: false, // ✅ unread hi rahega
+          });
+        });
+      });
+
+      // ✅ sirf delivered
+      socket.emit("messageDelivered", {
+        conversationId,
+        messageIds,
+      });
+
+      // ❌ read yaha bhi nahi
+    };
+    // ✅ DELETE
+    const handleDeleted = ({ conversationId: convId, messageIds }) => {
+      if (String(convId) !== String(conversationId)) return;
+
+      updateMessagesMap((map) => {
+        messageIds.forEach((id) => map.delete(String(id)));
+      });
     };
 
     socket.on("messageDelivered", handleDelivered);
@@ -234,62 +195,111 @@ export const useConversationMessages = (conversationId, userId) => {
       socket.off("messageDeleted", handleDeleted);
       socket.off("unreadMessages", handleUnread);
     };
+  }, [conversationId, userId, updateMessagesMap]);
 
-  }, [conversationId, userId]);
+  // -------------------- READ ON SCROLL (REAL WHATSAPP) --------------------
+  useEffect(() => {
+    if (!isUserAtBottomRef.current) return;
 
-  // -------------------- SCROLL --------------------
+    const unreadIds = [];
 
-  const scrollToBottom = useCallback((smooth = true) => {
-
-    const container = messagesContainerRef.current;
-
-    if (!container) return;
-
-    container.scrollTo({
-      top: container.scrollHeight,
-      behavior: smooth ? "smooth" : "auto"
+    messagesMapRef.current.forEach((msg) => {
+      if (String(msg.receiverId) === String(userId) && !msg.read) {
+        unreadIds.push(msg._id);
+      }
     });
 
-  }, []);
+    if (unreadIds.length === 0) return; // ✅ IMPORTANT FIX
 
-  useEffect(() => {
+    socket.emit("markMessageRead", {
+      conversationId,
+      messageIds: unreadIds,
+    });
 
-    const container = messagesContainerRef.current;
-    if (!container) return;
+    updateMessagesMap((map) => {
+      unreadIds.forEach((id) => {
+        const msg = map.get(String(id));
+        if (msg && !msg.read) {
+          map.set(String(id), { ...msg, read: true });
+        }
+      });
+    });
+  }, [messages, conversationId, userId]);
 
-    const handleScroll = () => {
 
-      const threshold = 80;
+  const prevConversationRef = useRef(null);
+const didInitialScrollRef = useRef(false);
 
-      const distance =
-        container.scrollHeight -
-        container.scrollTop -
-        container.clientHeight;
+useEffect(() => {
+  const container = messagesContainerRef.current;
+  if (!container || !conversationId) return;
 
-      isUserAtBottomRef.current = distance < threshold;
+  const isConversationChange =
+    prevConversationRef.current !== conversationId;
 
-    };
+  prevConversationRef.current = conversationId;
 
-    container.addEventListener("scroll", handleScroll);
+  if (!isConversationChange) return;
 
-    return () => container.removeEventListener("scroll", handleScroll);
+  didInitialScrollRef.current = false;
 
-  }, []);
+  requestAnimationFrame(() => {
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: "auto",
+    });
 
-  useEffect(() => {
-    if (isUserAtBottomRef.current) scrollToBottom(true);
-  }, [messages, scrollToBottom]);
+    didInitialScrollRef.current = true;
+  });
+}, [conversationId]);
 
-  useEffect(() => {
-    requestAnimationFrame(() => scrollToBottom(false));
-  }, [conversationId, scrollToBottom]);
 
+const prevMsgCountRef = useRef(0);
+
+useEffect(() => {
+  const container = messagesContainerRef.current;
+  if (!container) return;
+
+  const isNewMessage = messages.length > prevMsgCountRef.current;
+  prevMsgCountRef.current = messages.length;
+
+  if (!isNewMessage) return;
+  if (!didInitialScrollRef.current) return;
+  if (!isUserAtBottomRef.current) return;
+
+  requestAnimationFrame(() => {
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: "smooth",
+    });
+  });
+}, [messages]);
+
+useEffect(() => {
+  const container = messagesContainerRef.current;
+  if (!container) return;
+
+  const handleScroll = () => {
+    const threshold = 80;
+
+    const isBottom =
+      container.scrollHeight -
+      container.scrollTop -
+      container.clientHeight <
+      threshold;
+
+    isUserAtBottomRef.current = isBottom;
+  };
+
+  container.addEventListener("scroll", handleScroll);
+
+  return () => container.removeEventListener("scroll", handleScroll);
+}, []);
   return {
     messages,
     setMessages,
     loading,
     otherUserState,
     messagesContainerRef,
-    scrollToBottom
   };
 };
